@@ -1,0 +1,420 @@
+---
+title: "Repeated Cross Validation in Logistic Regression with Tuning for predicting Gender of Palmer Penguins of Antarctica"
+author: "FRK"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: 
+  html_document:
+    highlight: tango
+    toc: TRUE
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 6, eval = T)
+```
+
+# Reference
+
+This is an illustration of the work by [Julia Silge](https://juliasilge.com/blog/palmer-penguins/) and [Allison Horst](https://allisonhorst.github.io/palmerpenguins/articles/intro.html).  
+
+Here I used a Repeated k-fold Cross validation to see if there is any improvement or difference in performance of the model in repeated folds. 
+
+I also illustrate how to tune threshold for logistic regression in order to control sensitivity and specificity of the fitted model.
+
+***
+
+```{r, echo=FALSE, fig.cap="Palmer Penguins", fig.show='hold', fig.align='center', eval=TRUE}
+knitr::include_graphics(c("cover.png"))
+``` 
+
+***
+
+# Cross validation and Repetition
+
+In a k-fold cross validation, the data is Randomly split at 5 folds, if k=5. Then we iteratively fit model in 4 **train** folds, and test the model on the **test** fold. We do this 5 times and record the performance of the model. Then we take average of performance. This way we can get a robust estimate of the performance.
+
+Now, the data is split randomly at first, we don't know if this split results in maximum randomness. So to get even more robust / accurate estimate we **repeat** this 5-fold validation several times, and take average over all repetition
+
+***
+
+```{r, echo=FALSE, out.width="29%",  out.height="10%", fig.cap="5-fold Cross Validation", fig.show='hold', fig.align='center', eval=TRUE}
+knitr::include_graphics(c("image-86 - Copy.png"))
+``` 
+
+***
+
+```{r, echo=FALSE, out.width="29%",  out.height="8%", fig.cap="Repeated 5-fold Cross Validation", fig.show='hold', fig.align='center', eval=TRUE}
+knitr::include_graphics(c("image-86 - Copy.png", 
+                          "image-86 - Copy.png",
+                          "image-86 - Copy.png",
+                          "image-86 - Copy.png",
+                          "image-86 - Copy.png"))
+``` 
+
+***
+
+# Loading Packages
+
+```{r}
+if (!require('palmerpenguins')) devtools::install_github("allisonhorst/palmerpenguins"); library('palmerpenguins')
+
+require(ggplot2)
+require(tidymodels)
+
+```
+
+# Data
+
+```{r}
+
+penguins
+
+glimpse(penguins)
+
+```
+
+Today we will build a logistic regression model to predict the *Gender* of the palmer penguin, using body part lengths and body mass data.
+
+# Plot the Data
+
+Plot the data by *flipper length* and *bill length* of the penguins, also use *body mass* in the bubble plot to see for any relationship with the *gender* of the penguins. 
+
+```{r}
+penguins %>%
+  filter(!is.na(sex)) %>%
+  ggplot(aes(flipper_length_mm, bill_length_mm, color = sex, size = body_mass_g)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~species)
+
+```
+
+
+
+```{r}
+penguins %>%
+  drop_na() %>% 
+  select(species, body_mass_g, ends_with("_mm"), sex) %>%
+  GGally::ggpairs(aes(color = sex, alpha = 0.5))
+```
+
+
+Looks like there is relation between sex, body part lengths and body mass of the penguins.  
+
+***
+
+```{r, echo=FALSE, fig.cap="Body Parts of Penguins", fig.show='hold', fig.align='center', eval=TRUE}
+knitr::include_graphics(c("download.jpg"))
+``` 
+
+***
+
+
+***
+
+# Modelling Logistic Regression
+
+## Data for modelling
+
+We drop *year* and *island* from our data. Also drop missing observations in *sex*
+
+```{r}
+
+penguins_df <- penguins %>%
+  filter(!is.na(sex)) %>%
+  select(-year, -island)
+penguins_df
+
+levels(penguins_df$sex)
+
+```
+
+## Splitting Into Training and Testing Data
+
+We use **tidymodels** package for modelling *gender* of the palmer penguins. 
+
+```{r}
+
+set.seed(123)
+penguin_split <- initial_split(penguins_df, strata = sex)
+penguin_train <- training(penguin_split)
+penguin_test <- testing(penguin_split)
+penguin_split
+```
+
+## Create Repeated 10-fold Cross Validation Dataset
+
+```{r}
+
+penguin_cv <- vfold_cv(data = penguin_train, v = 10, repeats = 10, strata = sex)
+penguin_cv
+
+```
+
+## Specify Model
+
+```{r}
+
+glm_spec <- logistic_reg() %>%
+  set_engine("glm")
+
+```
+
+## Specify Workflow
+
+```{r}
+penguin_wf <- workflow() %>%
+  add_formula(sex ~ .)
+
+```
+
+## Fit the Logistic Model in CV datasets
+
+*fit_resamples* fits the logistic model in each of the 100 training datasets in the *penguin_cv* set, and evaluates the model on each of the 100 testing datasets. It also saves the predictions for evaluating performance of the model on each dataset.
+
+```{r}
+
+### Parallel Processing makes things faster
+### tidymodels support parallel processing
+
+doParallel::registerDoParallel()
+
+glm_rs <- penguin_wf %>%
+  add_model(glm_spec) %>%
+  fit_resamples(
+    resamples = penguin_cv,
+    control = control_resamples(save_pred = TRUE, verbose = TRUE)
+  )
+
+glm_rs
+
+```
+
+## Check Model Accuracy
+
+This accuracy and AUC is mean over all CV dataset.
+
+```{r}
+
+collect_metrics(glm_rs)
+
+glm_rs %>% 
+  unnest(.metrics) %>% 
+  ggplot(aes(id2, .estimate, color = .metric)) + 
+  geom_point() +
+  labs(title = "Accurary and ACU over Folds and Repetitions",
+       x = "Fold", 
+       y = NULL,
+       color = "Metric") +
+  facet_wrap(.metric ~ id) +
+  theme(axis.text.x = element_text(size=6, angle = 90)) 
+  
+
+```
+
+## Confusion Matrix
+
+Also showing average numbers in the confusion matrix.
+
+```{r}
+
+glm_rs %>%
+  conf_mat_resampled()
+```
+
+## ROC curves over folds and repeats
+
+The ROC curve shows similar performance over repeats, although some variation is seen over the folds within repeats.
+
+```{r}
+glm_rs %>%
+  collect_predictions() %>%
+  group_by(id, id2) %>%
+  roc_curve(sex, .pred_female) %>%
+  ggplot(aes(1 - specificity, sensitivity, color = id2)) +
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_path(show.legend = TRUE, alpha = 0.5, size = 0.8) +
+  coord_equal() +
+  facet_wrap(~id) + 
+  labs(color='Fold', x = "1 - Specificity", y = "Sensitivity", title = "ROC & AUC by Fold and Repeat") +
+  theme_minimal()
+
+```
+
+
+
+## Finalize model on Whole Training Data and Test on Testing data
+
+
+```{r}
+
+penguin_final <- penguin_wf %>%
+  add_model(glm_spec) %>%
+  last_fit(penguin_split)
+
+penguin_final
+
+```
+
+## Metrics over Test Data
+
+The metrics on testing data shows similar performance with the CV data. This indicated absence of overfitting, and good predictive performance of the logistic model for new data.
+
+```{r}
+
+collect_metrics(penguin_final)
+
+collect_predictions(penguin_final) %>%
+  conf_mat(sex, .pred_class)
+
+collect_predictions(penguin_final) %>%
+  sensitivity(sex, .pred_class)
+
+collect_predictions(penguin_final) %>%
+  specificity(sex, .pred_class)
+
+collect_predictions(penguin_final) %>%
+  precision(sex, .pred_class)
+```
+
+***
+
+## Tuning Threshold Probability for Classifying *Female* Penguin
+
+The *roc_curve* function constructs the full ROC curve using threshold values and returns a tibble.
+
+```{r, fig.height=9, fig.width=9}
+
+### First collect predictions on the test data from the model
+penguin_final %>%
+  collect_predictions()
+
+### Then construct roc curve with these predictions
+penguin_final %>%
+  collect_predictions() %>%
+  roc_curve(sex, .pred_female)
+```
+
+Using this tibble we can make the ROC curve and find optimal threshold for classifying **female** penguins.
+
+```{r}
+### Hover your mouse over this plot
+
+r <- penguin_final %>%
+  collect_predictions() %>%
+  roc_curve(sex, .pred_female) %>% 
+  ggplot(aes(1 - specificity, sensitivity)) +
+  geom_point(size = 0.2, aes(color = .threshold)) +
+  geom_abline(lty = 2, 
+              color = "gray80", 
+              size = 1.5) +
+  geom_path(show.legend = TRUE, 
+            alpha = 0.3, 
+            size = 0.5) +
+  geom_text(aes(label = round(.threshold, 2)), 
+            size = 2.5, 
+            vjust = -0.5, 
+            fontface = "bold")
+plotly::ggplotly(r)
+
+```
+
+The ROC curve shows threshold = **0.75** gives 100% Specificity. We can change the *predictions* made by the model by changing the threshold value to **0.75**, in order to predict males more accurately, with a little error to predicting females.  
+
+We can use the [probably](https://probably.tidymodels.org/articles/where-to-use.html) package to change the threshold and make new predictions. Check [HERE](https://stackoverflow.com/questions/66759453/tidymodels-classify-as-true-only-if-the-probability-is-75-or-higher) for more !
+
+```{r}
+### We need probably package
+library(probably)
+
+### set threshold
+thresh <- 0.75
+
+### For more information,
+### run ?roc_curve
+### run ?make_two_class_pred
+
+### Mutate .pred_class with new threshold
+
+new_preds <- penguin_final %>%
+  collect_predictions()  %>%
+  ### mutate .pred_class with new threshold
+  mutate(.pred_class = make_two_class_pred(.pred_female, ### Predicted Probability
+                                           levels(sex),
+                                           threshold = thresh), ### Threshold
+         .pred_class = factor(.pred_class, levels = levels(sex)))
+
+### With New Threshold, Performance on Test Data
+
+### Confusion Matrix 
+new_preds %>%
+  conf_mat(sex, .pred_class)
+
+### Sensitivity
+new_preds %>%
+  sensitivity(sex, .pred_class)
+### Specificity
+new_preds %>%
+  specificity(sex, .pred_class)
+### Precision
+new_preds %>%
+  precision(sex, .pred_class)
+
+```
+
+We can see the new threshold performs better in terms of specificity. This could be useful if the modeler (say a biologist) need to **classify males more accurately than females** for scientific purposes. We can also set threshold = 0.17 for 100% sensitivity, if we want to **classify females more accurately than males**.  
+
+By default tidymodels predicts with threshold = 0.50 for logistic regression.
+
+***
+
+## Odds Estimates and Variables
+
+Looks like *bill depth* and *bill length* have highest importance in predicting *gender* of the penguins. These two variables separate the penguins by *gender* most.
+
+```{r}
+penguin_final$.workflow[[1]] %>%
+  tidy(exponentiate = TRUE)
+
+penguin_final$.workflow[[1]] %>%
+  tidy(exponentiate = TRUE) %>% 
+  select(term, estimate) %>% 
+  mutate(term = as.factor(term)) %>% 
+  ggplot(aes(reorder(term, estimate), estimate, 
+             fill =term)) +
+  geom_bar(stat = "identity", show.legend = FALSE, width = 0.7) + 
+  labs(title = "Increase in odds of penguin being Female by one unit increase in each variable",
+       x = "Variable", y = "Odds increase by Times") +
+  geom_text(aes(label = round(estimate, 3)), 
+            nudge_y = 0.15 , 
+            size = 4.5, 
+            colour = 'black', 
+            fontface = 'bold') +
+  coord_flip() +
+  theme_light()
+
+```
+
+
+1mm increase in *bill depth* increases the odds of the penguin being female by almost **4 times**. Species don't seem to affect the prediction of gender of the penguins much.
+
+***
+
+# Bill Depth vs Bill Length Scatter
+
+```{r}
+  
+penguins %>%
+  filter(!is.na(sex)) %>%
+  ggplot(aes(bill_depth_mm, bill_length_mm, color = sex, size = body_mass_g)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~species)
+
+```
+
+***
+
+```{r, echo=FALSE, fig.cap="Bill Length and Bill Depth", fig.show='hold', fig.align='center', eval=TRUE}
+knitr::include_graphics(c("culmen_depth.png"))
+``` 
+
+***

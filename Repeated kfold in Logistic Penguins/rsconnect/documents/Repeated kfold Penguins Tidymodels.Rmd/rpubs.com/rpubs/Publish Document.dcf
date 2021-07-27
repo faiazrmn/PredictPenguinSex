@@ -1,0 +1,10 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/792898/112c3ef342e044b293bcb77e2ef5550c
+bundleId: https://api.rpubs.com/api/v1/document/792898/112c3ef342e044b293bcb77e2ef5550c
+url: http://rpubs.com/faiazrmn/792898
+when: 1627032350.18059
